@@ -1,110 +1,218 @@
 ﻿namespace Assets.Scripts.Core
 {
+    using System;
     using System.Collections.Generic;
-    using UnityEditor;
     using UnityEngine;
     using UnityEngine.Events;
     using UnityEngine.UI;
+    using Object = UnityEngine.Object;
 
+    /// <summary>
+    /// DragAndDrop orchestrate all DragElement and DropObject instances on current scene. That instances can be dynamically created through play mode and in Editor mode.
+    /// </summary>
     public class DragAndDrop : MonoBehaviour
     {
-        public Dictionary<int, DragElement> DragElements { get; private set; } = new Dictionary<int, DragElement>();
+        private const string DragAndDropString = "[DragAndDrop]: ";
 
-        public Dictionary<int, DropObject> DropObjects { get; private set; } = new Dictionary<int, DropObject>();
+        /// <summary>
+        /// Show/Hide logs in editor only. 
+        /// </summary>
+        public bool debugLogs;
 
-        public DragElement SelectedDragElement { get; set; }
+        /// <summary>
+        /// DragElements shown in Unity inspector to watch automatically assigned DragElements from scene.
+        /// </summary>
+        public DragElement[] dragElements;
 
-        public DragElement LastSelectedDragElement { get; set; }
+        /// <summary>
+        /// DragElements shown in Unity inspector to watch automatically assigned DropObjects from scene.
+        /// </summary>
+        public DropObject[] dropObjects;
 
-        public DropObject HoveredDropObject { get; set; }
+        private static bool enableLogs;
 
-        public DropObject LastDropObject { get; set; }
-
+        /// <summary>
+        /// Store client defined list of events which will executes when some GameObject with attached DragElement is begin drag on GameObject with attached DropObject on scene.
+        /// </summary>
+        [SerializeField]
         public UnityEvent onBeginDrag = new UnityEvent();
+
+        /// <summary>
+        /// Store client defined list of events which will executes when some GameObject with attached DragElement is being dragged on GameObject with attached DropObject on scene.
+        /// </summary>
+        [SerializeField]
         public UnityEvent onDrag = new UnityEvent();
+
+        /// <summary>
+        /// Store client defined list of events which will executes when some GameObject with attached DragElement was dropped on GameObject with attached DropObject on scene.
+        /// </summary>
+        [SerializeField]
         public UnityEvent onEndDrag = new UnityEvent();
+
+        /// <summary>
+        /// Store client defined list of events which will executes when some GameObject with attached DragElement was dropped outside on GameObject with attached DropObject on scene.
+        /// </summary>
+        [SerializeField]
         public UnityEvent onDropElementOutside = new UnityEvent();
+
+        /// <summary>
+        /// Automatically assigned DragElements from scene presented in cache mode with fast and easy way to get DragElement from the collection.
+        /// </summary>
+        public Dictionary<Guid, DragElement> DragElementsCache { get; private set; } = new Dictionary<Guid, DragElement>();
+
+        /// <summary>
+        /// Automatically assigned DropObjects from scene presented in cache mode with fast and easy way to get DropObjects from the collection.
+        /// </summary>
+        public Dictionary<Guid, DropObject> DropObjectsCache { get; private set; } = new Dictionary<Guid, DropObject>();
+
+        /// <summary>
+        /// Current DragElement witch selected on moment on begin drag event to that moment when drop it.
+        /// </summary>
+        public DragElement SelectedDragElement { get; private set; }
+
+        /// <summary>
+        /// Last DragElement witch selected before new selected DragElement.
+        /// </summary>
+        public DragElement LastSelectedDragElement { get; private set; }
+
+        /// <summary>
+        /// Current hovered (pointer/touch enter boundaries) DropObject.
+        /// </summary>
+        public DropObject HoveredDropObject { get; private set; }
+
+        /// <summary>
+        /// Last hovered (pointer/touch enter boundaries) DropObject before new Hovered DropObject.
+        /// </summary>
+        public DropObject LastDropObject { get; private set; }
 
         public void Start()
         {
-            DropObject[] dropObjects = this.transform.root.GetComponentsInChildren<DropObject>();
-            for (int i = 0; i < dropObjects.Length; i++)
-            {
-                DropObject dropObject = dropObjects[i];
-                CacheDropObject(dropObject);
-            }
-
-            DragElement[] childrenDragElements = this.transform.root.GetComponentsInChildren<DragElement>();
-            for (int i = 0; i < childrenDragElements.Length; i++)
-            {
-                CacheDragElement(childrenDragElements[i]);
-            }
+            CacheDragElements();
+            CacheDropObjects();
         }
 
-#if UNITY_EDITOR
-        public void OnValidate()
+        /// <summary>
+        /// Add new GameObject with attached DragElement on specific place in hierarchy.
+        /// </summary>
+        /// <param name="parent">Parent for new GameObject.</param>
+        /// <param name="prefab">Original object to copy.</param>
+        /// <param name="name">Specific name for new Game object.</param>
+        /// <returns>Created instance of DragElement.</returns>
+        public DragElement AddDragElement(Transform parent, DragElement prefab = null, string name = "NewDragElement")
         {
-            if (this.transform.root.GetComponentsInChildren<DragAndDrop>().Length > 1)
+            DragElement dragElement;
+            if (prefab == null)
             {
-                DragAndDropEditor.Log("More than one DragAndDrop instance has detected. You may have logical problems. Please centralize DragAndDrop logic on one place.", DragAndDropEditor.LogType.Warning, this.gameObject);
+                dragElement = new GameObject(name, typeof(RectTransform), typeof(DragElement)).GetComponent<DragElement>();
             }
-        }
-#endif
-        public DragElement AddDragElement(Transform parent, string name = "NewDragElement")
-        {
-            GameObject go = new GameObject(name, typeof(RectTransform), typeof(DragElement));
-            go.transform.SetParent(parent);
-            DragElement dragElement = go.GetComponent<DragElement>();
+            else
+            {
+                dragElement = Instantiate(prefab, parent);
+                dragElement.name = name;
+            }
+
+            dragElement.transform.SetParent(parent);
             CacheDragElement(dragElement);
 
             return dragElement;
         }
 
-        public DropObject AddDropObject(Transform parent, string name = "NewDropObject")
+        /// <summary>
+        /// Add new GameObject with attached DropObject on specific place in hierarchy.
+        /// </summary>
+        /// <param name="parent">Parent for new GameObject.</param>
+        /// <param name="prefab">Original object to copy.</param>
+        /// <param name="name">Specific name for new Game object.</param>
+        /// <returns>Created instance of DropObject.</returns>
+        public DropObject AddDropObject(Transform parent, DropObject prefab = null, string name = "NewDropObject")
         {
-            GameObject go = new GameObject(name, typeof(RectTransform), typeof(DropObject), typeof(Image));
-            go.transform.SetParent(parent);
-            go.GetComponent<Image>().color = Color.magenta;
-            DropObject dropObject = go.GetComponent<DropObject>();
-            dropObject.transform.localScale = Vector2.one;
+            DropObject dropObject;
+            if (prefab == null)
+            {
+                dropObject = new GameObject(name, typeof(RectTransform), typeof(DropObject), typeof(Image)).GetComponent<DropObject>();
+            }
+            else
+            {
+                dropObject = Instantiate(prefab, parent);
+                dropObject.name = name;
+            }
+
+            dropObject.transform.SetParent(parent);
             CacheDropObject(dropObject);
 
             return dropObject;
         }
 
-        private void CacheDropObject(DropObject dropObject)
+        /// <summary>
+        /// Destroy GameObject and remove from cache specific instance of DragElement
+        /// </summary>
+        /// <param name="dragElement"></param>
+        public void Destroy(DragElement dragElement)
         {
-            PrepareDropEvents(dropObject);
-
-            int instanceId = dropObject.GetInstanceID();
-            if (!this.DropObjects.ContainsKey(instanceId))
+            if (!this.DragElementsCache.ContainsKey(dragElement.Id))
             {
-                this.DropObjects.Add(instanceId, null);
+                Object.Destroy(dragElement.gameObject);
+                return;
             }
 
-            this.DropObjects[instanceId] = dropObject;
+            Object.Destroy(this.DragElementsCache[dragElement.Id].gameObject);
+            this.DragElementsCache.Remove(dragElement.Id);
         }
 
-        public void CacheDragElement(DragElement dragElement)
+        /// <summary>
+        /// Destroy GameObject and remove from cache specific instance of DropObject
+        /// </summary>
+        /// <param name="dropObject"></param>
+        public void Destroy(DropObject dropObject)
         {
-            PrepareItemEvents(dragElement);
-
-            int instanceId = dragElement.GetInstanceID();
-            if (!this.DragElements.ContainsKey(instanceId))
+            if (!this.DropObjectsCache.ContainsKey(dropObject.Id))
             {
-                this.DragElements.Add(instanceId, null);
+                Object.Destroy(dropObject.gameObject);
+                return;
             }
 
-            this.DragElements[instanceId] = dragElement;
+            Object.Destroy(this.DropObjectsCache[dropObject.Id].gameObject);
+            this.DropObjectsCache.Remove(dropObject.Id);
         }
 
-        private void PrepareItemEvents(DragElement dragElement)
+        /// <summary>
+        /// Cache all DragElements which are stored in <see cref="dragElements"/> on start.
+        /// </summary>
+        private void CacheDragElements()
         {
-            dragElement.OnBeginDragCallback = () =>
+            for (int i = 0; i < this.dragElements.Length; i++)
             {
-                this.SelectedDragElement = dragElement;
-                this.SelectedDragElement.transformCache.SetParent(this.transform);
-                //Debug.Log($"Begin Drag: {this.SelectedDragElement} D&D: {this.name}");
+                CacheDragElement(this.dragElements[i]);
+            }
+        }
+
+        /// <summary>
+        /// Cache all DropObjects which are stored in <see cref="dropObjects"/> on start.
+        /// </summary>
+        private void CacheDropObjects()
+        {
+            for (int i = 0; i < this.dropObjects.Length; i++)
+            {
+                CacheDropObject(this.dropObjects[i]);
+            }
+        }
+
+        /// <summary>
+        /// Attach on specific DragElement all officially drag events.
+        /// </summary>
+        /// <param name="dragElement">Specific DragElement for preparing.</param>
+        private void PrepareDragEvents(DragElement dragElement)
+        {
+            dragElement.OnBeginDragCallback = () => { LoadBeginDragEvents(dragElement); };
+
+            dragElement.OnDragCallback = () => LoadDragEvents();
+
+            dragElement.OnEndDragCallback = () => LoadEndDragEvents();
+
+            void LoadBeginDragEvents(DragElement element)
+            {
+                this.SelectedDragElement = element;
+                this.SelectedDragElement.TransformCache.SetParent(this.transform);
 
                 if (this.HoveredDropObject != null)
                 {
@@ -112,182 +220,178 @@
                 }
 
                 this.onBeginDrag.Invoke();
-            };
+            }
 
-            dragElement.OnDragCallback = () =>
+            void LoadDragEvents()
             {
                 this.onDrag.Invoke();
-            };
+            }
 
-            dragElement.OnEndDragCallback = () =>
+            void LoadEndDragEvents()
             {
                 this.onEndDrag.Invoke();
 
-                //Debug.Log($"End Drag : {this.SelectedDragElement} D&D: {this.name}");
                 if (this.HoveredDropObject != null)
                 {
-                    if (this.HoveredDropObject.IsEmpty)
+                    if (this.HoveredDropObject.isEmpty)
                     {
-                        this.SelectedDragElement.transformCache.SetParent(this.HoveredDropObject.transformCache);
-                        this.SelectedDragElement.transformCache.localPosition = Vector2.zero;
+                        this.SelectedDragElement.TransformCache.SetParent(this.HoveredDropObject.TransformCache);
+                        this.SelectedDragElement.TransformCache.localPosition = Vector2.zero;
                         this.SelectedDragElement.SetLastParent();
-                        this.HoveredDropObject.IsEmpty = false;
-
-                        if (this.LastDropObject != null)
-                        {
-                            this.LastDropObject.IsEmpty = true;
-                        }
+                        this.HoveredDropObject.isEmpty = false;
+                        LastDropObjectSetEmpty(true);
                     }
                     else
                     {
                         this.SelectedDragElement.ReturnToLastParent();
-
-                        if (this.LastDropObject)
-                        {
-                            this.LastDropObject.IsEmpty = false;
-                        }
+                        LastDropObjectSetEmpty(false);
                     }
                 }
                 else if (this.HoveredDropObject == null)
                 {
                     this.onDropElementOutside.Invoke();
-                    if (this.LastDropObject)
-                    {
-                        this.LastDropObject.IsEmpty = true;
-                    }
+                    LastDropObjectSetEmpty(true);
                 }
+
 
                 this.LastSelectedDragElement = this.SelectedDragElement;
                 this.SelectedDragElement = null;
-            };
+            }
         }
 
+        /// <summary>
+        /// Attach on specific DropObject all officially drag events.
+        /// </summary>
+        /// <param name="dropObject">Specific DropObject for preparing.</param>
         private void PrepareDropEvents(DropObject dropObject)
         {
-            dropObject.OnPointerEnterCallback = () =>
-            {
-                this.HoveredDropObject = dropObject;
-                //Debug.Log("Enter" + this.HoveredDropObject);
-            };
+            dropObject.OnPointerEnterCallback = () => { LoadPointerEnterEvents(dropObject); };
 
-            dropObject.OnPointerExitCallback = () =>
+            dropObject.OnPointerExitCallback = () => { LoadPointerExitEvents(); };
+
+            void LoadPointerEnterEvents(DropObject оbject)
+            {
+                this.HoveredDropObject = оbject;
+            }
+
+            void LoadPointerExitEvents()
             {
                 this.HoveredDropObject = null;
-                //                Debug.Log(" Exit " + this.HoveredDropObject);
-            };
+            }
         }
 
-        public static T AddMissingComponent<T>(GameObject go) where T : Component
+        /// <summary>
+        /// Attach events and Cache specific DragElement in <see cref="DragElementsCache"/>
+        /// </summary>
+        /// <param name="dragElement"></param>
+        public void CacheDragElement(DragElement dragElement)
         {
-            T found = go.GetComponent<T>();
+            PrepareDragEvents(dragElement);
+
+            if (!this.DragElementsCache.ContainsKey(dragElement.Id))
+            {
+                this.DragElementsCache.Add(dragElement.Id, null);
+            }
+
+            this.DragElementsCache[dragElement.Id] = dragElement;
+            this.DragElementsCache[dragElement.Id].IsCached = true;
+        }
+
+        /// <summary>
+        /// Attach events and Cache specific DragElement in <see cref="DropObjectsCache"/>
+        /// </summary>
+        /// <param name="dropObject"></param>
+        public void CacheDropObject(DropObject dropObject)
+        {
+            PrepareDropEvents(dropObject);
+
+            Guid id = dropObject.Id;
+            if (!this.DropObjectsCache.ContainsKey(id))
+            {
+                this.DropObjectsCache.Add(id, null);
+            }
+
+            this.DropObjectsCache[id] = dropObject;
+            this.DropObjectsCache[id].IsCached = true;
+        }
+
+        /// <summary>
+        /// Change <see cref="isEmpty"/> on <see cref="LastDropObject"/>.
+        /// </summary>
+        /// <param name="isEmpty">New Value</param>
+        private void LastDropObjectSetEmpty(bool isEmpty)
+        {
+            if (this.LastDropObject != null)
+            {
+                this.LastDropObject.isEmpty = isEmpty;
+            }
+        }
+
+        /// <summary>
+        /// Add component when that component is missing from specific GameObject.
+        /// </summary>
+        /// <typeparam name="T">Type of new checked component.</typeparam>
+        /// <param name="gameObject">GameObject which will check for missing component.</param>
+        /// <returns></returns>
+        public static T AddMissingComponent<T>(GameObject gameObject) where T : Component
+        {
+            T found = gameObject.GetComponent<T>();
 
             if (found == null)
             {
-                return go.AddComponent<T>();
+                return gameObject.AddComponent<T>();
             }
 
             return found;
         }
-    }
-
-    public static class DragAndDropEditor
-    {
-        private const string DragAndDropString = "[DragAndDrop]: ";
 
 #if UNITY_EDITOR
-        public enum LogType
+        public void OnValidate()
         {
-            Info,
-            Warning,
-            Error
-        }
+            enableLogs = this.debugLogs;
 
-        [SerializeField]
-        public static bool enableLogs = true;
-
-        [MenuItem("GameObject/DragAndDrop/CreateDragAndDrop %DO", false)]
-        [MenuItem("DragAndDrop/CreateDragAndDrop %DD", false)]
-        public static void CreateDragAndDropOnSelected()
-        {
-            GameObject go = new GameObject("DragAndDropPanel", typeof(RectTransform), typeof(DragAndDrop));
-            go.transform.SetParent(Selection.activeGameObject.transform);
-
-            RectTransform rectTransform = go.GetComponent<RectTransform>();
-            rectTransform.localScale = Vector2.one;
-            rectTransform.sizeDelta = new Vector2(400, 200);
-
-            DragAndDrop dragAndDrop = go.GetComponent<DragAndDrop>();
-
-            GameObject dropObjectContainer = new GameObject("DropObjectContainer", typeof(GridLayoutGroup));
-            dropObjectContainer.transform.SetParent(dragAndDrop.transform);
-            rectTransform = dropObjectContainer.GetComponent<RectTransform>();
-            rectTransform.localScale = Vector2.one;
-            rectTransform.sizeDelta = new Vector2(400, 200);
-
-
-            DragElement dragElement = dragAndDrop.AddDragElement(dragAndDrop.transform);
-            dragElement.transform.localScale = Vector2.one;
-            dragElement.transform.localPosition += new Vector3(0, -200, 0);
-            Image image = DragAndDrop.AddMissingComponent<Image>(dragElement.gameObject);
-            image.color = Color.cyan;
-
-
-            DropObject dropObject = dragAndDrop.AddDropObject(dropObjectContainer.transform);
-            dropObject.transform.localScale = Vector2.one;
-            image = DragAndDrop.AddMissingComponent<Image>(dropObject.gameObject);
-            image.color = Color.magenta;
-
-            Undo.RegisterCreatedObjectUndo(go, "Create DragAndDrop");
-        }
-
-        [MenuItem("GameObject/DragAndDrop/CreateDragElement %DO", false)]
-        [MenuItem("DragAndDrop/CreateDragElement %DE", false)]
-        [MenuItem("CONTEXT/DragAndDrop/CreateDragElement %DE", false)]
-        public static void AddDragElementOnSelected()
-        {
-            DragAndDrop dragAndDrop = Selection.activeGameObject.GetComponent<DragAndDrop>();
-            if (dragAndDrop == null)
+            if (this.transform.root.GetComponentsInChildren<DragAndDrop>().Length > 1)
             {
-                Log("Selected GameObject do not have Drag And Drop Component. Please assign and try again", LogType.Error, Selection.activeGameObject);
-                return;
+                Log("More than one DragAndDrop instance has detected. You may have logical problems. Please centralize DragAndDrop logic on one script.", LogType.Warning, this.gameObject);
             }
 
-            DragElement dragElement = dragAndDrop.AddDragElement(Selection.activeGameObject.transform);
-            Undo.RegisterCreatedObjectUndo(dragElement, "Create DragElement");
+            this.dragElements = this.transform.root.GetComponentsInChildren<DragElement>(true);
+            this.dropObjects = this.transform.root.GetComponentsInChildren<DropObject>(true);
         }
 
-        [MenuItem("GameObject/DragAndDrop/CreateDropObject %DO", false)]
-        [MenuItem("DragAndDrop/CreateDropObject %DO", false)]
-        [MenuItem("CONTEXT/DragAndDrop/CreateDropObject %DO", false)]
-        public static void AddDropObjectOnSelected()
-        {
-            DragAndDrop dragAndDrop = Selection.activeGameObject.GetComponent<DragAndDrop>();
-            if (dragAndDrop == null)
-            {
-                Log("Selected GameObject do not have Drag And Drop Component. Please assign and try again", LogType.Error, Selection.activeGameObject);
-            }
-
-            DropObject dropObject = dragAndDrop.AddDropObject(Selection.activeGameObject.transform);
-            Undo.RegisterCreatedObjectUndo(dropObject, "Create DropObject");
-        }
-
-        public static void Log(string message, LogType logType, GameObject go)
+        /// <summary>
+        /// Centralized log message on unity Debug console.
+        /// </summary>
+        /// <param name="message">Specific message for print.</param>
+        /// <param name="logType">Type of the message.</param>
+        /// <param name="GameObjectToPoint"></param>
+        public static void Log(string message, LogType logType, GameObject GameObjectToPoint = null)
         {
             if (!enableLogs)
                 return;
 
             switch (logType)
             {
+                case LogType.Info:
+                    Debug.Log($"{DragAndDropString}{message}", GameObjectToPoint);
+                    break;
                 case LogType.Warning:
-                    Debug.LogWarning($"{DragAndDropString}{message}", go);
+                    Debug.LogWarning($"{DragAndDropString}{message}", GameObjectToPoint);
                     break;
                 case LogType.Error:
-                    Debug.LogError($"{DragAndDropString}{message}", go);
-                    break;
-                default:
-                    Debug.Log($"{DragAndDropString}{message}", go);
+                    Debug.LogError($"{DragAndDropString}{message}", GameObjectToPoint);
                     break;
             }
+        }
+
+        /// <summary>
+        /// Message log types.
+        /// </summary>
+        public enum LogType
+        {
+            Info,
+            Warning,
+            Error
         }
 #endif
     }
